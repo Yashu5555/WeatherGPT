@@ -6,21 +6,27 @@ load_dotenv()
 
 key = os.getenv("WEATHER_API_KEY")
 if not key:
-    print("WEATHER_API_KEY is missing")
+    raise ValueError("WEATHER_API_KEY is missing")
 
 
-def get_forecast(city):
+def get_forecast(city,days):
 
     url = "https://api.weatherapi.com/v1/forecast.json"
 
     params = {
         "key": key,
         "q": city,
-        "days": 3
+        "days": days
     }
     try:
-        response = requests.get(url, params=params)
+        response = requests.get(url, params=params,timeout=10)
+        response.raise_for_status()
+
         data = response.json()
+        if "error" in data:
+            return {
+                "error": data["error"]["message"]
+            }
 
         forecast = []
 
@@ -37,12 +43,13 @@ def get_forecast(city):
 
             forecast.append(weather)
 
-        return forecast
+        return {
+    "location": data["location"]["name"],
+    "forecast": forecast
+}
     except requests.exceptions.RequestException:
                 return {"error": "Internet or API connection failed"}
 
 
-forecast = get_forecast("Hyderabad")
-
-for day in forecast:
-    print(day)
+if __name__ == "__main__":
+        print(get_forecast("Hyderabad",7))
