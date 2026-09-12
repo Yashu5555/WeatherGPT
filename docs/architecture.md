@@ -26,6 +26,13 @@ Backend also connects to:
 - PostgreSQL Database
 - Alert Services
 - Climate / Historical Data
+                      ┌── AI / NLP
+                    │
+User → Frontend → Backend → Weather Data Service → Weather Sources
+                    │
+                    ├── PostgreSQL
+                    ├── Alert Services
+                    └── Climate / Historical Data
 
 ## 3. Main Components
 
