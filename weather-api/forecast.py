@@ -9,7 +9,7 @@ if not key:
     raise ValueError("WEATHER_API_KEY is missing")
 
 
-def get_forecast(city,days):
+def get_forecast(city, days):
 
     url = "https://api.weatherapi.com/v1/forecast.json"
 
@@ -19,7 +19,7 @@ def get_forecast(city,days):
         "days": days
     }
     try:
-        response = requests.get(url, params=params,timeout=10)
+        response = requests.get(url, params=params, timeout=10)
         response.raise_for_status()
 
         data = response.json()
@@ -42,14 +42,14 @@ def get_forecast(city,days):
             }   
 
             forecast.append(weather)
-
         return {
     "location": data["location"]["name"],
     "forecast": forecast
 }
     except requests.exceptions.RequestException:
                 return {"error": "Internet or API connection failed"}
-
+    except ValueError:
+            return {"error": "Invalid response received from weather API"}
 
 if __name__ == "__main__":
-        print(get_forecast("Hyderabad",7))
+        print(get_forecast("Hyderabad", 7))
