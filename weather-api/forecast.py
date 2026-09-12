@@ -46,10 +46,29 @@ def get_forecast(city, days):
     "location": data["location"]["name"],
     "forecast": forecast
 }
+    except requests.exceptions.HTTPError as e:
+        if e.response is not None:
+            try:
+                error_data = e.response.json()
+                error_code = error_data.get("error", {}).get("code")
+
+                if error_code == 1006:
+                    return {"error": "Location not found"}
+
+                if error_code == 2006:
+                    return {"error": "Weather API key is invalid"}
+
+            except ValueError:
+                pass
+
+        return {"error": "Weather API request failed"}
+    
     except requests.exceptions.RequestException:
-                return {"error": "Internet or API connection failed"}
+        return {"error": "Unable to connect to weather service"}
+    
     except ValueError:
-            return {"error": "Invalid response received from weather API"}
+        return {"error": "Invalid response received from weather service"}
 
 if __name__ == "__main__":
         print(get_forecast("Hyderabad", 7))
+
