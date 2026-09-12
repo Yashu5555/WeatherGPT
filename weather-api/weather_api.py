@@ -21,12 +21,21 @@ def get_weather(city):
 
     try:
         response = requests.get(url, params=params, timeout=10)
-        response.raise_for_status()
-
+        
         data = response.json()
-
+        
         if "error" in data:
-            return {"error": data["error"]["message"]}
+            code = data["error"].get("code")
+
+            if code == 1006:
+                return {"error": "Location not found"}
+
+            if code == 2006:
+                return {"error": "Weather API key is invalid"}
+
+            return {"error": "Weather service returned an error"}
+        
+        response.raise_for_status()
 
         return {
             "location": data["location"]["name"],
@@ -38,11 +47,28 @@ def get_weather(city):
             "feeling_like": data["current"]["feelslike_c"]
         }
 
-    except requests.exceptions.RequestException as e:
-        return {"error": f"Weather API request failed: {e}"}
+    except requests.exceptions.HTTPError as e:
+        if e.response is not None:
+            try:
+                error_data = e.response.json()
+                error_code = error_data.get("error", {}).get("code")
+
+                if error_code == 1006:
+                    return {"error": "Location not found"}
+
+                if error_code == 2006:
+                    return {"error": "Weather API key is invalid"}
+
+            except ValueError:
+                pass
+
+        return {"error": "Weather API request failed"}
+    
+    except requests.exceptions.RequestException:
+        return {"error": "Unable to connect to weather service"}
 
     except ValueError:
-        return {"error": "Invalid response received from weather API"}
+        return {"error": "Invalid response received from weather service"}
 
 
 if __name__ == "__main__":
