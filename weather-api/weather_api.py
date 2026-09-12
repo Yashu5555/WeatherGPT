@@ -1,5 +1,5 @@
-import requests
 import os
+import requests
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -7,7 +7,7 @@ load_dotenv()
 key = os.getenv("WEATHER_API_KEY")
 
 if not key:
-    print("WEATHER_API_KEY is missing")
+    raise ValueError("WEATHER_API_KEY is missing")
 
 
 def get_weather(city):
@@ -21,13 +21,14 @@ def get_weather(city):
 
     try:
         response = requests.get(url, params=params, timeout=10)
+        response.raise_for_status()
 
         data = response.json()
 
         if "error" in data:
             return {"error": data["error"]["message"]}
 
-        weather = {
+        return {
             "location": data["location"]["name"],
             "temperature": data["current"]["temp_c"],
             "humidity": data["current"]["humidity"],
@@ -37,12 +38,12 @@ def get_weather(city):
             "feeling_like": data["current"]["feelslike_c"]
         }
 
-        return weather
+    except requests.exceptions.RequestException as e:
+        return {"error": f"Weather API request failed: {e}"}
 
-    except requests.exceptions.RequestException:
-        return {"error": "Internet or API connection failed"}
+    except ValueError:
+        return {"error": "Invalid response received from weather API"}
 
 
-weather = get_weather("Istanbul")
-
-print(weather)
+if __name__ == "__main__":
+    print(get_weather("Hyderabad"))
