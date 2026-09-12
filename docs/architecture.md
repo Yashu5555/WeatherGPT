@@ -16,6 +16,8 @@ FastAPI Backend
  ↓
 AI / NLP
  ↓
+Backend
+ ↓
 Weather Data Service
  ↓
 Weather APIs / Meteorological Sources
