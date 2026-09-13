@@ -1,8 +1,11 @@
-CREATE TABLE users (
+drop database weathergpt;
+create database weathergpt;
+use weathergpt;
+create TABLE users (
     user_id SERIAL PRIMARY KEY,
-    name VARCHAR(100) NOT NULL,
+    user_name VARCHAR(100) NOT NULL,
     email VARCHAR(150) UNIQUE NOT NULL,
-    language VARCHAR(50) DEFAULT 'English',
+    native_lang VARCHAR(50) DEFAULT 'English',
     preferences TEXT
 );
 
@@ -11,13 +14,16 @@ CREATE TABLE weather_queries (
     user_id INT REFERENCES users(user_id),
     question TEXT NOT NULL,
     location VARCHAR(100),
-    timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    at_what_time TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
+/*
+
+*/
 CREATE TABLE weather_history (
     id SERIAL PRIMARY KEY,
     location VARCHAR(100) NOT NULL,
-    date DATE NOT NULL,
+    at_date DATE NOT NULL,
     temperature DECIMAL(5,2),
     rainfall DECIMAL(6,2),
     humidity DECIMAL(5,2),
@@ -29,7 +35,7 @@ CREATE TABLE alerts (
     location VARCHAR(100) NOT NULL,
     alert_type VARCHAR(100),
     severity VARCHAR(50),
-    description TEXT,
+    details TEXT,
     start_time TIMESTAMP,
     end_time TIMESTAMP
 );
@@ -37,7 +43,7 @@ CREATE TABLE alerts (
 CREATE TABLE advisories (
     advisory_id SERIAL PRIMARY KEY,
     location VARCHAR(100) NOT NULL,
-    type VARCHAR(100),
-    description TEXT,
+    advisory_type VARCHAR(100),
+    details TEXT,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
