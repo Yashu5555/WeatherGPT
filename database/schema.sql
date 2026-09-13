@@ -33,18 +33,22 @@ CREATE TABLE weather_history (
 
 CREATE TABLE alerts (
     alert_id INT PRIMARY KEY auto_increment,
+	query_id INT,
     location VARCHAR(100) NOT NULL,
     alert_type VARCHAR(100),
     severity VARCHAR(50),
     details TEXT,
     start_time TIMESTAMP,
-    end_time TIMESTAMP
+    end_time TIMESTAMP,
+    FOREIGN KEY (query_id) REFERENCES weather_queries(query_id)
 );
 
 CREATE TABLE advisories (
     advisory_id INT PRIMARY KEY auto_increment,
+	query_id INT,
     location VARCHAR(100) NOT NULL,
     advisory_type VARCHAR(100),
     details TEXT,
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (query_id) REFERENCES weather_queries(query_id)
 );
