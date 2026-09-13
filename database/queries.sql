@@ -1,16 +1,49 @@
-
+-- Insert a sample user
 INSERT INTO users (user_name, email, native_lang, preferences)
 VALUES ('Test User', 'test@example.com', 'English', 'Temperature alerts');
 
--- SELECT * FROM users;
+-- View all users
+SELECT * FROM users;
 
-INSERT INTO weather_queries (user_id,question,location,at_what_time)
-VALUES(1,"Should I carry an umbrella tomorrow evening in Hyderabad?","hyderabad",current_timestamp());
+-- View all weather queries
+SELECT * FROM weather_queries;
 
--- SELECT * FROM weather_queries;
+-- View weather history
+SELECT * FROM weather_history;
 
--- SELECT * FROM weather_history;
+-- View alerts
+SELECT * FROM alerts;
 
--- SELECT * FROM alerts;
+-- View advisories
+SELECT * FROM advisories;
 
--- SELECT * FROM advisories;
+-- Join users with their weather queries
+SELECT
+    u.user_name,
+    q.question,
+    q.location,
+    q.at_what_time
+FROM users u
+JOIN weather_queries q
+ON u.user_id = q.user_id;
+
+-- Find Hyderabad weather history
+SELECT *
+FROM weather_history
+WHERE location = 'Hyderabad';
+
+-- Find average temperature by location
+SELECT
+    location,
+    AVG(temperature) AS average_temperature
+FROM weather_history
+GROUP BY location;
+
+-- Count queries made by each user
+SELECT
+    u.user_name,
+    COUNT(q.query_id) AS total_queries
+FROM users u
+JOIN weather_queries q
+ON u.user_id = q.user_id
+GROUP BY u.user_name;
