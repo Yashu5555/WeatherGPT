@@ -1,253 +1,568 @@
-
 import json
+import os
 import re
+from typing import Any, Dict, Optional
+
+from dotenv import load_dotenv
+
+load_dotenv()
+
+GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 
 
-def parse_weather_query(query: str) -> dict:
-    """Parse a natural-language weather question into structured JSON."""
+SYSTEM_PROMPT = """
+You are the query parser for WeatherGPT.
+
+Your ONLY job is to understand the user's weather question and convert it
+into a structured JSON object.
+
+You MUST NOT answer the weather question.
+You MUST NOT invent or predict weather values.
+You MUST NOT provide temperature, rainfall, humidity, wind or any other
+weather data.
+
+Use ONLY these two intents:
+- "current_weather" : current conditions or today's weather
+- "weather_forecast" : future weather, tomorrow, a future date, or
+  multi-day forecasts
+
+Extract:
+1. intent
+2. location
+3. date OR days
+
+Rules:
+
+- For current weather:
+{
+    "intent": "current_weather",
+    "location": "Hyderabad",
+    "date": "today"
+}
+
+- For future single-day weather:
+{
+    "intent": "weather_forecast",
+    "location": "Hyderabad",
+    "date": "tomorrow"
+}
+
+- For a multi-day forecast:
+{
+    "intent": "weather_forecast",
+    "location": "Chennai",
+    "days": 3
+}
+
+- Questions about rain, temperature, humidity, wind, clouds, sunshine,
+  umbrellas, jackets, travel, picnics, etc. do NOT create new intents.
+  They must use either current_weather or weather_forecast.
+
+- If the user says "tonight", use:
+  "date": "tonight"
+
+- If the user says "today", use:
+  "date": "today"
+
+- If the user says "tomorrow", use:
+  "date": "tomorrow"
+
+- If the user says "day after tomorrow", use:
+  "date": "day after tomorrow"
+
+- If the user asks for a number of days, return an integer in "days".
+
+- If the location is missing, return:
+{
+    "error": "Location not found in the question."
+}
+
+- If the question is unrelated to weather, return:
+{
+    "error": "This question is not related to weather."
+}
+
+- Return ONLY valid JSON.
+- Do NOT return markdown.
+- Do NOT return explanations.
+"""
+
+
+def _clean_and_parse_json(content: str) -> Optional[Dict[str, Any]]:
+    """Convert the LLM response into a Python dictionary."""
+
+    if not content:
+        return None
+
+    cleaned = content.strip()
+
+    # Remove markdown code fences if the model returns them
+    if cleaned.startswith("```"):
+        lines = cleaned.splitlines()
+
+        if lines and lines[0].startswith("```"):
+            lines = lines[1:]
+
+        if lines and lines[-1].startswith("```"):
+            lines = lines[:-1]
+
+        cleaned = "\n".join(lines).strip()
+
+    try:
+        data = json.loads(cleaned)
+
+        if isinstance(data, dict):
+            return data
+
+    except (json.JSONDecodeError, TypeError, ValueError):
+        pass
+
+    return None
+
+
+def _validate_llm_result(
+    result: Optional[Dict[str, Any]]
+) -> Optional[Dict[str, Any]]:
+    """
+    Validate the JSON returned by the LLM before passing it
+    to the backend.
+    """
+
+    if not isinstance(result, dict):
+        return None
+
+    # Valid error responses
+    if "error" in result:
+        if result["error"] in {
+            "Location not found in the question.",
+            "This question is not related to weather."
+        }:
+            return {"error": result["error"]}
+
+        return None
+
+    # Validate intent
+    intent = result.get("intent")
+
+    if intent not in {"current_weather", "weather_forecast"}:
+        return None
+
+    # Validate location
+    location = result.get("location")
+
+    if not isinstance(location, str) or not location.strip():
+        return None
+
+    location = location.strip()
+
+    # Validate multi-day forecast
+    if "days" in result:
+
+        days = result["days"]
+
+        if not isinstance(days, int) or isinstance(days, bool):
+            return None
+
+        if days < 1 or days > 14:
+            return None
+
+        return {
+            "intent": "weather_forecast",
+            "location": location,
+            "days": days
+        }
+
+    # Validate date
+    date = result.get("date")
+
+    if not isinstance(date, str) or not date.strip():
+        return None
+
+    date = date.strip().lower()
+
+    allowed_dates = {
+        "today",
+        "tonight",
+        "tomorrow",
+        "day after tomorrow",
+        "monday",
+        "tuesday",
+        "wednesday",
+        "thursday",
+        "friday",
+        "saturday",
+        "sunday"
+    }
+
+    if date not in allowed_dates:
+        return None
+
+    return {
+        "intent": intent,
+        "location": location.title(),
+        "date": date
+    }
+
+
+def _parse_with_groq(query: str) -> Optional[Dict[str, Any]]:
+    """Parse the weather query using Groq LLM."""
+
+    if not GROQ_API_KEY:
+        return None
+
+    try:
+        from groq import Groq
+
+        client = Groq(api_key=GROQ_API_KEY)
+
+        response = client.chat.completions.create(
+            model="openai/gpt-oss-20b",
+            messages=[
+                {
+                    "role": "system",
+                    "content": SYSTEM_PROMPT
+                },
+                {
+                    "role": "user",
+                    "content": query
+                }
+            ],
+            temperature=0,
+            response_format={"type": "json_object"}
+        )
+
+        content = response.choices[0].message.content
+
+        result = _clean_and_parse_json(content)
+
+        return _validate_llm_result(result)
+
+    except Exception as e:
+        print(f"Groq parser unavailable: {e}")
+        return None
+
+
+def _parse_rule_based(query: str) -> Dict[str, Any]:
+    """Fallback parser used when the Groq API is unavailable."""
 
     if not query or not query.strip():
-        return {"error": "Empty question provided."}
+        return {
+            "error": "Empty question provided."
+        }
 
     text = query.strip()
+
+    # Fix common spelling mistake
+    text = re.sub(
+        r"\btommorow\b",
+        "tomorrow",
+        text,
+        flags=re.IGNORECASE
+    )
+
     lower = text.lower()
 
-    # 1. Check domain relevance
+    # 1. Check weather relevance
     weather_keywords = [
-        "weather", "forecast", "temp", "temperature",
-        "rain", "raining", "rainfall", "snow", "snowing",
-        "climate", "sunny", "sunshine", "clear", "clear sky",
-        "cloud", "clouds", "cloudy", "overcast",
-        "wind", "windy", "breeze", "breezy",
-        "humidity", "humid", "hot", "cold", "warm",
-        "umbrella", "raincoat", "jacket", "coat",
-        "sunscreen", "picnic", "outdoor", "outside",
-        "drive", "travel", "about"
+        "weather",
+        "forecast",
+        "temperature",
+        "temp",
+        "rain",
+        "raining",
+        "rainfall",
+        "rainy",
+        "snow",
+        "snowing",
+        "climate",
+        "sunny",
+        "sunshine",
+        "clear",
+        "cloud",
+        "clouds",
+        "cloudy",
+        "overcast",
+        "wind",
+        "windy",
+        "breeze",
+        "humidity",
+        "humid",
+        "hot",
+        "cold",
+        "warm",
+        "cool",
+        "umbrella",
+        "raincoat",
+        "jacket",
+        "storm",
+        "shower",
+        "picnic",
+        "outdoor",
+        "outside",
+        "travel",
+        "trip",
+        "drive"
     ]
 
-    if not any(w in lower for w in weather_keywords):
+    if not any(word in lower for word in weather_keywords):
         return {
-            "error": "Unsupported or unclear question. Please ask a weather-related query."
+            "error": "This question is not related to weather."
         }
 
     # 2. Extract number of days
-    days = 1
+    days = None
 
     days_match = re.search(
-        r"\b(?:for|next)?\s*(\d+)\s*(?:day|days)\b",
+        r"\b(?:for\s+|next\s+)?(\d+)\s*days?\b",
         lower
     )
 
     if days_match:
         days = int(days_match.group(1))
-    elif re.search(r"\b(?:next|for)\s+(?:one|a)\s+week\b", lower):
-        days = 7
-    elif re.search(r"\bnext\s+week\b", lower):
-        days = 7
 
-    # 3. Stop words
+        if days < 1 or days > 14:
+            return {
+                "error": "Forecast is currently supported for up to 14 days."
+            }
+
+    # 3. Extract date
+    date_patterns = [
+        "day after tomorrow",
+        "tomorrow",
+        "today",
+        "tonight",
+        "monday",
+        "tuesday",
+        "wednesday",
+        "thursday",
+        "friday",
+        "saturday",
+        "sunday"
+    ]
+
+    date_regex = (
+        r"\b("
+        + "|".join(re.escape(x) for x in date_patterns)
+        + r")\b"
+    )
+
+    date_match = re.search(
+        date_regex,
+        lower
+    )
+
+    date = date_match.group(1) if date_match else "today"
+
+    # 4. Clean text before location extraction
+    clean_text = re.sub(
+        r"\b(?:for\s+|next\s+)?"
+        r"(?:\d+)\s*days?\b",
+        " ",
+        text,
+        flags=re.IGNORECASE
+    )
+
+    clean_text = re.sub(
+        date_regex,
+        " ",
+        clean_text,
+        flags=re.IGNORECASE
+    )
+
+    clean_text = re.sub(
+        r"[?.!,;:]",
+        " ",
+        clean_text
+    )
+
+    # 5. Stop words
     stop_words = {
-        "in", "at", "for", "of", "near", "around", "to", "on",
-        "the", "a", "an", "is", "be", "are",
-        "what", "how", "tell", "me", "will", "it",
-        "weather", "forecast", "temperature", "temp", "climate",
-        "today", "tonight", "tomorrow", "tommorow",
-        "day", "after", "next", "week", "weeks",
-        "this", "evening", "morning", "afternoon",
-        "rain", "raining", "rainfall", "sunny", "sunshine",
-        "clear", "sky", "cloudy", "cloud", "clouds", "overcast",
-        "snow", "snowing",
-        "wind", "windy", "breeze", "breezy",
+        "in", "at", "near", "around", "for", "of",
+        "the", "a", "an", "is", "are", "was", "were",
+        "what", "whats", "what's", "how", "hows", "how's",
+        "where", "wheres", "where's",
+        "tell", "me", "show", "give", "will", "it",
+        "its", "it's", "weather", "forecast",
+        "temperature", "temp", "rain", "raining",
+        "rainfall", "rainy", "sunny", "sunshine",
+        "cloud", "clouds", "cloudy", "wind", "windy",
         "humidity", "humid", "hot", "cold", "warm",
-        "umbrella", "raincoat", "jacket", "coat",
-        "sunscreen", "picnic", "outdoor", "outside",
-        "drive", "travel", "should", "i", "carry",
-        "need", "take", "wear", "bring", "plan",
-        "can", "could", "would", "good", "about",
-        "going", "be", "do", "does", "is", "will"
+        "cool", "today", "tomorrow", "should",
+        "i", "carry", "umbrella", "can", "you",
+        "please", "current", "currently", "check",
+        "is", "there", "going", "to", "be",
+        "day", "next", "week", "good",
+        "for", "plan", "planning", "travel",
+        "trip", "drive", "outside", "outdoor"
     }
 
-    # 4. Clean query
-    clean_text = re.sub(r"[?.!,;:]", " ", text)
+    def clean_location(value: str) -> Optional[str]:
+        words = []
 
-    # Remove duration expressions
-    clean_text = re.sub(
-        r"\b(?:for|next)?\s*(?:\d+|one|a)\s*(?:day|days|week|weeks)\b",
-        " ",
-        clean_text,
-        flags=re.IGNORECASE
-    )
+        for word in value.split():
+            cleaned_word = word.strip("'\"")
 
-    # Remove multi-word time expressions
-    clean_text = re.sub(
-        r"\bday\s+after\s+tomorrow\b",
-        " ",
-        clean_text,
-        flags=re.IGNORECASE
-    )
+            if (
+                cleaned_word
+                and cleaned_word.lower() not in stop_words
+                and not cleaned_word.isdigit()
+            ):
+                words.append(cleaned_word)
 
-    # 5. Extract location
-    location = None
-
-    def clean_location(value):
-        words = [
-            w for w in value.split()
-            if w.lower() not in stop_words and not w.isdigit()
-        ]
         if words:
             return " ".join(words).title()
+
         return None
 
-    # Location after in / at / near / around / to / about
-    prep_match = re.search(
-        r"\b(?:in|at|near|around|to|about)\s+([a-zA-Z]+(?:\s+[a-zA-Z]+){0,4})",
-        clean_text,
-        re.IGNORECASE
+    location = None
+
+    # 6. Possessive pattern
+    # Example: "Chennai's forecast"
+    possessive_match = re.search(
+        r"\b([a-zA-Z]+(?:\s+[a-zA-Z]+){0,4})['’]s\b",
+        clean_text
     )
 
-    if prep_match:
-        location = clean_location(prep_match.group(1))
+    if possessive_match:
+        location = clean_location(
+            possessive_match.group(1)
+        )
 
-    # Location before weather-related words
+    # 7. Preposition pattern
+    # Example: "weather in Hyderabad"
+    if not location:
+        prep_match = re.search(
+            r"\b(?:in|at|near|around)\s+"
+            r"([a-zA-Z]+(?:\s+[a-zA-Z]+){0,4})",
+            clean_text,
+            re.IGNORECASE
+        )
+
+        if prep_match:
+            location = clean_location(
+                prep_match.group(1)
+            )
+
+    # 8. Direct pattern
+    # Example: "Hyderabad weather"
     if not location:
         direct_match = re.search(
-            r"^\s*([a-zA-Z]+(?:\s+[a-zA-Z]+){0,4})\s+"
-            r"(?:weather|forecast|temp|temperature|climate|rain|snow|wind|humidity)\b",
+            r"^\s*"
+            r"([a-zA-Z]+(?:\s+[a-zA-Z]+){0,4})"
+            r"\s+"
+            r"(?:weather|forecast|temp|temperature)\b",
             clean_text,
             re.IGNORECASE
         )
 
         if direct_match:
-            location = clean_location(direct_match.group(1))
+            location = clean_location(
+                direct_match.group(1)
+            )
 
-    # Fallback: remaining meaningful words
+    # 9. Fallback location extraction
     if not location:
-        words = [
-            w for w in clean_text.split()
-            if w.lower() not in stop_words
-            and not w.isdigit()
-        ]
+        words = []
+
+        for word in clean_text.split():
+            cleaned_word = word.strip("'\"")
+
+            if (
+                cleaned_word
+                and cleaned_word.lower() not in stop_words
+                and not cleaned_word.isdigit()
+            ):
+                words.append(cleaned_word)
 
         if words:
             location = " ".join(words).title()
 
-    # 6. Detect intent
+    # 10. Location missing
+    if not location:
+        return {
+            "error": "Location not found in the question."
+        }
 
-    # Rain-related queries
-        # 6. Detect intent
-    # Only 2 intents:
-    # current_weather
-    # weather_forecast
-
-    forecast_keywords = [
-        # Forecast / prediction
-        "forecast", "prediction", "predict",
-        "will it", "going to", "expected",
-
-        # Future / time
-        "tomorrow", "tonight",
+    # 11. Determine intent
+    future_keywords = [
+        "tomorrow",
+        "tonight",
         "day after tomorrow",
-        "this evening", "this morning",
-        "this afternoon", "next", "upcoming",
-
-        # Planning / future activities
-        "picnic", "outdoor", "outside",
-        "drive", "travel", "trip", "journey",
-        "plan", "planning", "wear",
-        "what should i wear", "what to wear",
-        "should i carry", "do i need",
-        "is it a good day", "good for"
+        "next",
+        "upcoming",
+        "will it",
+        "going to",
+        "expected",
+        "forecast",
+        "prediction",
+        "predict",
+        "picnic",
+        "travel",
+        "trip",
+        "drive",
+        "outdoor",
+        "outside",
+        "plan",
+        "planning"
     ]
 
-    current_weather_keywords = [
-        # Rain
-        "rain", "raining", "rainfall", "rainy",
-        "drizzle", "drizzling", "shower", "showers",
-        "precipitation", "chance of rain", "rain chance",
-        "wet", "umbrella", "raincoat", "downpour",
-        "heavy rain", "light rain",
-
-        # Sunny
-        "sunny", "sunshine", "sun", "bright",
-        "clear", "clear sky", "clear skies",
-        "sunny weather", "bright sky", "no clouds",
-        "cloudless",
-
-        # Cloud
-        "cloudy", "cloud", "clouds", "overcast",
-        "cloud cover", "cloudy weather",
-        "grey sky", "gray sky", "mostly cloudy",
-        "partly cloudy",
-
-        # Temperature
-        "temperature", "temp", "degree", "degrees",
-        "hot", "cold", "warm", "cool",
-        "heat", "how hot", "how cold",
-        "temperature today", "temperature now",
-        "maximum temperature", "minimum temperature",
-        "highest temperature", "lowest temperature",
-
-        # Humidity
-        "humidity", "humid", "moisture",
-        "muggy", "damp", "relative humidity",
-        "humidity level", "humidity percentage",
-
-        # Wind
-        "wind", "windy", "winds",
-        "breeze", "breezy", "gust", "gusts",
-        "wind speed", "wind direction",
-        "strong wind", "high winds",
-        "windy weather", "how strong is the wind"
-    ]
-
-    if days > 1:
-        intent = "weather_forecast"
-
-    elif any(word in lower for word in forecast_keywords):
-        intent = "weather_forecast"
-
-    else:
-        intent = "current_weather"
+    if (
+        days is not None
+        or any(word in lower for word in future_keywords)
+    ):
+        return {
+            "intent": "weather_forecast",
+            "location": location,
+            "days": days if days is not None else 1
+        }
 
     return {
-        
-        "intent": intent,
+        "intent": "current_weather",
         "location": location,
-        "days": days
+        "date": date
     }
 
 
+def parse_weather_query(query: str) -> Dict[str, Any]:
+    """
+    Parse a weather question using Groq first,
+    then fall back to rule-based parsing.
+    """
+
+    # Try LLM parser first
+    groq_result = _parse_with_groq(query)
+
+    if groq_result is not None:
+        return groq_result
+
+    # Fallback
+    return _parse_rule_based(query)
+
+
 if __name__ == "__main__":
+
     test_queries = [
-        "What is the weather in Hyderabad tonight?",
-        "Will it rain in Hyderabad tonight?",
-        "Weather Hyderabad tonight",
-        "Hyderabad weather tonight",
-        "Weather in Hyderabad tomorrow",
-        "Weather Hyderabad day after tomorrow",
-        "Weather Hyderabad next week",
-        "Weather Hyderabad for one week",
-        "5 day forecast Hyderabad",
-        "7 days forecast in Hyderabad",
+        "What's the weather in Hyderabad?",
+        "What's the temperature in Mumbai?",
+        "Will it rain in Delhi tomorrow?",
+        "What's the weather in Hyderabad tonight?",
+        "Give me Chennai's forecast for 3 days.",
         "Weather in New York City tomorrow",
-        "Weather in Rio de Janeiro tomorrow",
-        "Weather in Los Angeles tonight",
-        "What about Hyderabad tonight?",
-        "What's Hyderabad weather tonight?",
-        "Should I carry an umbrella in Hyderabad tonight?",
-        "Should I wear a jacket in Hyderabad tonight?",
-        "Is it clear in Hyderabad tonight?",
-        "Temperature Hyderabad tonight",
-        "Humidity in Hyderabad tonight",
-        "Wind in Hyderabad tonight",
-        "Can I travel to Mumbai tomorrow?",
-        "Can I plan a picnic in Pune tomorrow?"
+        "Should I carry an umbrella in Hyderabad tomorrow?",
+        "Should I use sunscreen today in Hyderabad?",
+        "Weather Hyderabad",
+        "Hyderabad weather",
+        "Weather Hyderabad for 7 days",
+        "Hello",
+        "What's the weather?"
     ]
 
-    for q in test_queries:
-        print(f"Query : {q}")
-        print(f"Result: {json.dumps(parse_weather_query(q), indent=4)}\n")
+    for query in test_queries:
+        print(f"\nQuery: {query}")
 
-    user_input = input("Enter your weather question: ")
-    if user_input.strip():
-        print(json.dumps(parse_weather_query(user_input), indent=4))
+        result = parse_weather_query(query)
+
+        print(
+            "Result:",
+            json.dumps(result, indent=2)
+        )
