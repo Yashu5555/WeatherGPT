@@ -1,18 +1,16 @@
--- Insert a user
-INSERT INTO users (name, email, language, preferences)
+
+INSERT INTO users (user_name, email, native_lang, preferences)
 VALUES ('Test User', 'test@example.com', 'English', 'Temperature alerts');
 
--- View all users
 SELECT * FROM users;
 
--- View all weather queries
+INSERT INTO weather_queries (user_id,question,location,at_what_time)
+values(1,"Should I carry an umbrella tomorrow evening in Hyderabad?","hyderabad",current_timestamp());
+
 SELECT * FROM weather_queries;
 
--- View weather history
 SELECT * FROM weather_history;
 
--- View alerts
 SELECT * FROM alerts;
 
--- View advisories
 SELECT * FROM advisories;
