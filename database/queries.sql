@@ -1,7 +1,5 @@
-
 INSERT INTO users (name, email, language, preferences)
 VALUES ('Test User', 'test@example.com', 'English', 'Temperature alerts');
-
 
 SELECT * FROM users;
 
