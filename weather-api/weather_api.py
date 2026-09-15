@@ -33,6 +33,15 @@ def get_weather(city):
             if code == 2006:
                 return {"error": "Weather API key is invalid"}
 
+            if code == 2007:
+                return {"error": "Weather API request limit exceeded"}
+
+            if code == 2008:
+                return {"error": "Weather API key is disabled"}
+
+            if code == 2009:
+                return {"error": "Weather API access denied"}
+
             return {"error": "Weather service returned an error"}
 
         response.raise_for_status()
