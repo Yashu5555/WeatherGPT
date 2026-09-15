@@ -1,9 +1,5 @@
-DROP DATABASE IF EXISTS weathergpt;
 CREATE DATABASE weathergpt;
--- Connect to the database
--- In PostgreSQL, run this separately in psql:
-\c weathergpt
-
+SELECT current_database();
 CREATE TABLE users (
     user_id SERIAL PRIMARY KEY,
     user_name VARCHAR(100) NOT NULL,
