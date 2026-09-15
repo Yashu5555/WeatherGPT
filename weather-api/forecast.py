@@ -14,6 +14,9 @@ def get_forecast(city, days):
 
     url = "https://api.weatherapi.com/v1/forecast.json"
 
+    if not 1 <= days <= 14:
+        return {"error": "Forecast days must be between 1 and 14"}
+        
     params = {
         "key": key,
         "q": city,
@@ -33,6 +36,15 @@ def get_forecast(city, days):
 
             if code == 2006:
                 return {"error": "Weather API key is invalid"}
+
+            if code == 2007:
+                return {"error": "Weather API request limit exceeded"}
+
+            if code == 2008:
+                return {"error": "Weather API key is disabled"}
+
+            if code == 2009:
+                return {"error": "Weather API access denied"}
 
             return {"error": "Weather service returned an error"}
 
