@@ -33,6 +33,10 @@ Extract:
 
 Rules:
 
+- Phrases such as "right now", "currently", "at the moment",
+  and "at present" refer to the current time and MUST NOT be included
+  in the location.
+  
 - For current weather:
 {
     "intent": "current_weather",
@@ -389,7 +393,8 @@ def _parse_rule_based(query: str) -> Dict[str, Any]:
         "humidity", "humid", "hot", "cold", "warm",
         "cool", "today", "tomorrow", "should",
         "i", "carry", "umbrella", "can", "you",
-        "please", "current", "currently", "check",
+        "please", "current", "currently", "right",
+        "now", "moment", "present","check",
         "is", "there", "going", "to", "be",
         "day", "next", "week", "good",
         "for", "plan", "planning", "travel",
