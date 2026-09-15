@@ -13,90 +13,104 @@ GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 SYSTEM_PROMPT = """
 You are the query parser for WeatherGPT.
 
-Your ONLY job is to understand the user's weather question and convert it
-into a structured JSON object.
+Your ONLY job is to understand the user's weather question and return
+a structured JSON object.
 
 You MUST NOT answer the weather question.
-You MUST NOT invent or predict weather values.
-You MUST NOT provide temperature, rainfall, humidity, wind or any other
-weather data.
+You MUST NOT invent weather values.
 
-Use ONLY these two intents:
-- "current_weather" : current conditions or today's weather
-- "weather_forecast" : future weather, tomorrow, a future date, or
-  multi-day forecasts
-
-Extract:
-1. intent
-2. location
-3. date OR days
+Use only these intents:
+- "current_weather"
+- "weather_forecast"
 
 Rules:
 
-- For current weather:
+1. Current weather questions use current_weather.
+
+Examples:
+"Is it hot outside in Hyderabad?"
+"What is the weather in Hyderabad?"
+"How windy is it right now in Hyderabad?"
+"Should I use sunscreen today in Hyderabad?"
+
+Return:
 {
     "intent": "current_weather",
     "location": "Hyderabad",
     "date": "today"
 }
 
-- For future single-day weather:
+2. Future weather questions use weather_forecast.
+
+Examples:
+"Will it rain tomorrow in Hyderabad?"
+"Do I need a jacket tonight in Hyderabad?"
+"Will it rain this weekend in Hyderabad?"
+
+3. "after N days" means one specific future day.
+
+Example:
+"What will the weather be like after 5 days in Hyderabad?"
+
+Return:
 {
     "intent": "weather_forecast",
     "location": "Hyderabad",
-    "date": "tomorrow"
+    "date": "after_days",
+    "days": 5
 }
 
-- For a multi-day forecast:
+4. "next N days" or "for N days" means a multi-day forecast.
+
+Example:
+"What will the weather be like for the next 5 days in Hyderabad?"
+
+Return:
 {
     "intent": "weather_forecast",
-    "location": "Chennai",
-    "days": 3
+    "location": "Hyderabad",
+    "days": 5
 }
 
-- Questions about rain, temperature, humidity, wind, clouds, sunshine,
-  umbrellas, jackets, travel, picnics, etc. do NOT create new intents.
-  They must use either current_weather or weather_forecast.
+5. "this weekend" must return date "this_weekend".
 
-- If the user says "tonight", use:
-  "date": "tonight"
+6. "tonight" must return date "tonight".
 
-- If the user says "today", use:
-  "date": "today"
+7. "tomorrow" must return date "tomorrow".
 
-- If the user says "tomorrow", use:
-  "date": "tomorrow"
+8. "day after tomorrow" must return date "day after tomorrow".
 
-- If the user says "day after tomorrow", use:
-  "date": "day after tomorrow"
+9. Questions about temperature, rain, humidity, wind, clouds,
+sunshine, sunscreen, UV, umbrellas, jackets, picnics, travel,
+etc. do NOT create new intents.
 
-- If the user asks for a number of days, return an integer in "days".
+10. Words such as "hot", "cold", "windy", "humid", "sunny",
+"cloudy", "rainy" and "outside" do NOT automatically mean
+future weather.
 
-- If the location is missing, return:
+11. If location is missing, return:
 {
     "error": "Location not found in the question."
 }
 
-- If the question is unrelated to weather, return:
+12. If unrelated to weather, return:
 {
     "error": "This question is not related to weather."
 }
 
-- Return ONLY valid JSON.
-- Do NOT return markdown.
-- Do NOT return explanations.
+Return ONLY valid JSON.
 """
 
 
-def _clean_and_parse_json(content: str) -> Optional[Dict[str, Any]]:
-    """Convert the LLM response into a Python dictionary."""
+def _clean_and_parse_json(
+    content: str
+) -> Optional[Dict[str, Any]]:
 
     if not content:
         return None
 
     cleaned = content.strip()
 
-    # Remove markdown code fences if the model returns them
     if cleaned.startswith("```"):
         lines = cleaned.splitlines()
 
@@ -123,16 +137,12 @@ def _clean_and_parse_json(content: str) -> Optional[Dict[str, Any]]:
 def _validate_llm_result(
     result: Optional[Dict[str, Any]]
 ) -> Optional[Dict[str, Any]]:
-    """
-    Validate the JSON returned by the LLM before passing it
-    to the backend.
-    """
 
     if not isinstance(result, dict):
         return None
 
-    # Valid error responses
     if "error" in result:
+
         if result["error"] in {
             "Location not found in the question.",
             "This question is not related to weather."
@@ -141,21 +151,21 @@ def _validate_llm_result(
 
         return None
 
-    # Validate intent
     intent = result.get("intent")
 
-    if intent not in {"current_weather", "weather_forecast"}:
+    if intent not in {
+        "current_weather",
+        "weather_forecast"
+    }:
         return None
 
-    # Validate location
     location = result.get("location")
 
     if not isinstance(location, str) or not location.strip():
         return None
 
-    location = location.strip()
+    location = location.strip().title()
 
-    # Validate multi-day forecast
     if "days" in result:
 
         days = result["days"]
@@ -166,16 +176,23 @@ def _validate_llm_result(
         if days < 1 or days > 14:
             return None
 
+        if result.get("date") == "after_days":
+            return {
+                "intent": "weather_forecast",
+                "location": location,
+                "date": "after_days",
+                "days": days
+            }
+
         return {
             "intent": "weather_forecast",
             "location": location,
             "days": days
         }
 
-    # Validate date
     date = result.get("date")
 
-    if not isinstance(date, str) or not date.strip():
+    if not isinstance(date, str):
         return None
 
     date = date.strip().lower()
@@ -185,6 +202,7 @@ def _validate_llm_result(
         "tonight",
         "tomorrow",
         "day after tomorrow",
+        "this_weekend",
         "monday",
         "tuesday",
         "wednesday",
@@ -199,13 +217,14 @@ def _validate_llm_result(
 
     return {
         "intent": intent,
-        "location": location.title(),
+        "location": location,
         "date": date
     }
 
 
-def _parse_with_groq(query: str) -> Optional[Dict[str, Any]]:
-    """Parse the weather query using Groq LLM."""
+def _parse_with_groq(
+    query: str
+) -> Optional[Dict[str, Any]]:
 
     if not GROQ_API_KEY:
         return None
@@ -242,8 +261,9 @@ def _parse_with_groq(query: str) -> Optional[Dict[str, Any]]:
         return None
 
 
-def _parse_rule_based(query: str) -> Dict[str, Any]:
-    """Fallback parser used when the Groq API is unavailable."""
+def _parse_rule_based(
+    query: str
+) -> Dict[str, Any]:
 
     if not query or not query.strip():
         return {
@@ -252,7 +272,6 @@ def _parse_rule_based(query: str) -> Dict[str, Any]:
 
     text = query.strip()
 
-    # Fix common spelling mistake
     text = re.sub(
         r"\btommorow\b",
         "tomorrow",
@@ -262,7 +281,7 @@ def _parse_rule_based(query: str) -> Dict[str, Any]:
 
     lower = text.lower()
 
-    # 1. Check weather relevance
+    # Weather relevance
     weather_keywords = [
         "weather",
         "forecast",
@@ -278,6 +297,11 @@ def _parse_rule_based(query: str) -> Dict[str, Any]:
         "sunny",
         "sunshine",
         "clear",
+        "sunscreen",
+        "uv",
+        "ultraviolet",
+        "sun protection",
+        "sunburn",
         "cloud",
         "clouds",
         "cloudy",
@@ -304,28 +328,50 @@ def _parse_rule_based(query: str) -> Dict[str, Any]:
         "drive"
     ]
 
-    if not any(word in lower for word in weather_keywords):
+    if not any(
+        word in lower for word in weather_keywords
+    ):
         return {
             "error": "This question is not related to weather."
         }
 
-    # 2. Extract number of days
-    days = None
-
-    days_match = re.search(
-        r"\b(?:for\s+|next\s+)?(\d+)\s*days?\b",
+    # "after N days" MUST be checked first
+    after_days_match = re.search(
+        r"\bafter\s+(\d+)\s*days?\b",
         lower
     )
 
-    if days_match:
-        days = int(days_match.group(1))
+    if after_days_match:
+
+        days = int(after_days_match.group(1))
 
         if days < 1 or days > 14:
             return {
-                "error": "Forecast is currently supported for up to 14 days."
+                "error":
+                "Forecast is currently supported for up to 14 days."
             }
 
-    # 3. Extract date
+    else:
+
+        # Only "next N days" / "for N days"
+        days_match = re.search(
+            r"\b(?:for\s+|next\s+)(\d+)\s*days?\b",
+            lower
+        )
+
+        days = None
+
+        if days_match:
+
+            days = int(days_match.group(1))
+
+            if days < 1 or days > 14:
+                return {
+                    "error":
+                    "Forecast is currently supported for up to 14 days."
+                }
+
+    # Dates
     date_patterns = [
         "day after tomorrow",
         "tomorrow",
@@ -342,7 +388,10 @@ def _parse_rule_based(query: str) -> Dict[str, Any]:
 
     date_regex = (
         r"\b("
-        + "|".join(re.escape(x) for x in date_patterns)
+        + "|".join(
+            re.escape(x)
+            for x in date_patterns
+        )
         + r")\b"
     )
 
@@ -351,14 +400,24 @@ def _parse_rule_based(query: str) -> Dict[str, Any]:
         lower
     )
 
-    date = date_match.group(1) if date_match else "today"
+    date = (
+        date_match.group(1)
+        if date_match
+        else "today"
+    )
 
-    # 4. Clean text before location extraction
+    # Clean text for location extraction
     clean_text = re.sub(
-        r"\b(?:for\s+|next\s+)?"
-        r"(?:\d+)\s*days?\b",
+        r"\bafter\s+\d+\s*days?\b",
         " ",
         text,
+        flags=re.IGNORECASE
+    )
+
+    clean_text = re.sub(
+        r"\b(?:for\s+|next\s+)\d+\s*days?\b",
+        " ",
+        clean_text,
         flags=re.IGNORECASE
     )
 
@@ -370,12 +429,19 @@ def _parse_rule_based(query: str) -> Dict[str, Any]:
     )
 
     clean_text = re.sub(
+        r"\bthis\s+weekend\b",
+        " ",
+        clean_text,
+        flags=re.IGNORECASE
+    )
+
+    clean_text = re.sub(
         r"[?.!,;:]",
         " ",
         clean_text
     )
 
-    # 5. Stop words
+    # Words that should NOT become part of location
     stop_words = {
         "in", "at", "near", "around", "for", "of",
         "the", "a", "an", "is", "are", "was", "were",
@@ -387,24 +453,30 @@ def _parse_rule_based(query: str) -> Dict[str, Any]:
         "rainfall", "rainy", "sunny", "sunshine",
         "cloud", "clouds", "cloudy", "wind", "windy",
         "humidity", "humid", "hot", "cold", "warm",
-        "cool", "today", "tomorrow", "should",
-        "i", "carry", "umbrella", "can", "you",
-        "please", "current", "currently", "check",
-        "is", "there", "going", "to", "be",
-        "day", "next", "week", "good",
-        "for", "plan", "planning", "travel",
-        "trip", "drive", "outside", "outdoor"
+        "cool", "should", "i", "carry", "umbrella",
+        "can", "you", "please", "current", "currently",
+        "right", "now", "moment", "present", "check",
+        "there", "going", "to", "be", "day", "next",
+        "week", "good", "plan", "planning", "travel",
+        "trip", "drive", "outside", "outdoor", "picnic",
+        "use", "sunscreen", "uv", "ultraviolet",
+        "jacket", "need"
     }
 
-    def clean_location(value: str) -> Optional[str]:
+    def clean_location(
+        value: str
+    ) -> Optional[str]:
+
         words = []
 
         for word in value.split():
+
             cleaned_word = word.strip("'\"")
 
             if (
                 cleaned_word
-                and cleaned_word.lower() not in stop_words
+                and cleaned_word.lower()
+                not in stop_words
                 and not cleaned_word.isdigit()
             ):
                 words.append(cleaned_word)
@@ -416,21 +488,21 @@ def _parse_rule_based(query: str) -> Dict[str, Any]:
 
     location = None
 
-    # 6. Possessive pattern
-    # Example: "Chennai's forecast"
+    # Possessive
     possessive_match = re.search(
         r"\b([a-zA-Z]+(?:\s+[a-zA-Z]+){0,4})['’]s\b",
         clean_text
     )
 
     if possessive_match:
+
         location = clean_location(
             possessive_match.group(1)
         )
 
-    # 7. Preposition pattern
-    # Example: "weather in Hyderabad"
+    # Preposition
     if not location:
+
         prep_match = re.search(
             r"\b(?:in|at|near|around)\s+"
             r"([a-zA-Z]+(?:\s+[a-zA-Z]+){0,4})",
@@ -439,13 +511,14 @@ def _parse_rule_based(query: str) -> Dict[str, Any]:
         )
 
         if prep_match:
+
             location = clean_location(
                 prep_match.group(1)
             )
 
-    # 8. Direct pattern
-    # Example: "Hyderabad weather"
+    # Direct pattern
     if not location:
+
         direct_match = re.search(
             r"^\s*"
             r"([a-zA-Z]+(?:\s+[a-zA-Z]+){0,4})"
@@ -456,20 +529,24 @@ def _parse_rule_based(query: str) -> Dict[str, Any]:
         )
 
         if direct_match:
+
             location = clean_location(
                 direct_match.group(1)
             )
 
-    # 9. Fallback location extraction
+    # Fallback
     if not location:
+
         words = []
 
         for word in clean_text.split():
+
             cleaned_word = word.strip("'\"")
 
             if (
                 cleaned_word
-                and cleaned_word.lower() not in stop_words
+                and cleaned_word.lower()
+                not in stop_words
                 and not cleaned_word.isdigit()
             ):
                 words.append(cleaned_word)
@@ -477,18 +554,42 @@ def _parse_rule_based(query: str) -> Dict[str, Any]:
         if words:
             location = " ".join(words).title()
 
-    # 10. Location missing
     if not location:
+
         return {
             "error": "Location not found in the question."
         }
 
-    # 11. Determine intent
+    # Intent
+    if after_days_match:
+
+        return {
+            "intent": "weather_forecast",
+            "location": location,
+            "date": "after_days",
+            "days": days
+        }
+
+    if days is not None:
+
+        return {
+            "intent": "weather_forecast",
+            "location": location,
+            "days": days
+        }
+
+    if "this weekend" in lower:
+
+        return {
+            "intent": "weather_forecast",
+            "location": location,
+            "date": "this_weekend"
+        }
+
     future_keywords = [
         "tomorrow",
         "tonight",
         "day after tomorrow",
-        "next",
         "upcoming",
         "will it",
         "going to",
@@ -496,73 +597,63 @@ def _parse_rule_based(query: str) -> Dict[str, Any]:
         "forecast",
         "prediction",
         "predict",
-        "picnic",
         "travel",
         "trip",
         "drive",
-        "outdoor",
-        "outside",
         "plan",
         "planning"
     ]
 
-    if (
-        days is not None
-        or any(word in lower for word in future_keywords)
+    if any(
+        word in lower
+        for word in future_keywords
     ):
+
         return {
             "intent": "weather_forecast",
             "location": location,
-            "days": days if days is not None else 1
+            "date": date
         }
 
     return {
         "intent": "current_weather",
         "location": location,
-        "date": date
+        "date": "today"
     }
 
 
-def parse_weather_query(query: str) -> Dict[str, Any]:
-    """
-    Parse a weather question using Groq first,
-    then fall back to rule-based parsing.
-    """
+def parse_weather_query(
+    query: str
+) -> Dict[str, Any]:
 
-    # Try LLM parser first
     groq_result = _parse_with_groq(query)
 
     if groq_result is not None:
         return groq_result
 
-    # Fallback
     return _parse_rule_based(query)
 
 
 if __name__ == "__main__":
 
     test_queries = [
-        "What's the weather in Hyderabad?",
-        "What's the temperature in Mumbai?",
-        "Will it rain in Delhi tomorrow?",
-        "What's the weather in Hyderabad tonight?",
-        "Give me Chennai's forecast for 3 days.",
-        "Weather in New York City tomorrow",
-        "Should I carry an umbrella in Hyderabad tomorrow?",
-        "Should I use sunscreen today in Hyderabad?",
-        "Weather Hyderabad",
-        "Hyderabad weather",
-        "Weather Hyderabad for 7 days",
-        "Hello",
-        "What's the weather?"
+        "Is it hot outside in Hyderabad?",
+        "What will the weather be like after 5 days in Hyderabad?",
+        "What will the weather be like for the next 5 days in Hyderabad?",
+        "Do I need a jacket tonight in Hyderabad?",
+        "Is it going to rain this weekend in Hyderabad?"
     ]
 
     for query in test_queries:
+
         print(f"\nQuery: {query}")
 
         result = parse_weather_query(query)
 
         print(
             "Result:",
-            json.dumps(result, indent=2)
+            json.dumps(
+                result,
+                indent=2
+            )
         )

@@ -53,7 +53,8 @@ def get_weather(city):
             "condition": data["current"]["condition"]["text"],
             "wind_speed": data["current"]["wind_kph"],
             "rain_chance": data["current"]["chance_of_rain"],
-            "feeling_like": data["current"]["feelslike_c"]
+            "feeling_like": data["current"]["feelslike_c"],
+            "uv": data["current"]["uv"]
         }
 
     except requests.exceptions.HTTPError:
