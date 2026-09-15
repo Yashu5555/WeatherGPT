@@ -1,5 +1,5 @@
-import os
 import requests
+import os
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -10,13 +10,17 @@ if not key:
     raise ValueError("WEATHER_API_KEY is missing")
 
 
-def get_weather(city):
+def get_forecast(city, days):
 
-    url = "https://api.weatherapi.com/v1/current.json"
+    url = "https://api.weatherapi.com/v1/forecast.json"
 
+    if not 1 <= days <= 14:
+        return {"error": "Forecast days must be between 1 and 14"}
+        
     params = {
         "key": key,
-        "q": city
+        "q": city,
+        "days": days
     }
 
     try:
@@ -46,14 +50,24 @@ def get_weather(city):
 
         response.raise_for_status()
 
+        forecast = []
+
+        for day in data["forecast"]["forecastday"]:
+            weather = {
+                "date": day["date"],
+                "max_temp": day["day"]["maxtemp_c"],
+                "min_temp": day["day"]["mintemp_c"],
+                "condition": day["day"]["condition"]["text"],
+                "rain_chance": day["day"]["daily_chance_of_rain"],
+                "sunrise": day["astro"]["sunrise"],
+                "sunset": day["astro"]["sunset"]
+            }
+
+            forecast.append(weather)
+
         return {
             "location": data["location"]["name"],
-            "temperature": data["current"]["temp_c"],
-            "humidity": data["current"]["humidity"],
-            "condition": data["current"]["condition"]["text"],
-            "wind_speed": data["current"]["wind_kph"],
-            "rain_chance": data["current"]["chance_of_rain"],
-            "feeling_like": data["current"]["feelslike_c"]
+            "forecast": forecast
         }
 
     except requests.exceptions.HTTPError:
@@ -67,4 +81,4 @@ def get_weather(city):
 
 
 if __name__ == "__main__":
-    print(get_weather("Hyderabad"))
+    print(get_forecast("Hyderabad", 7))
